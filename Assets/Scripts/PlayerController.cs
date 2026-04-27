@@ -44,6 +44,10 @@ public class PlayerController : MonoBehaviour
     private float jumpHorizontalSpeed; // 점프 시 수평 속도
     private float currentChargeTime; // 현재 충전된 시간
 
+    /// <summary>현재 충전 비율 (0~1). UI 게이지에서 사용.</summary>
+    public float ChargeRatio => Mathf.Clamp01(currentChargeTime / maxChargeTime);
+    /// <summary>현재 충전 중인지 여부.</summary>
+    public bool IsCharging { get; private set; }
     private Rigidbody2D rb;
     private SpriteRenderer spriteRenderer;
     private bool isGrounded;
@@ -92,7 +96,8 @@ public class PlayerController : MonoBehaviour
 
         // 2. 충전 로직
         // 점프 충전 중인지 확인 (스페이스바 누르고 있고 바닥에 있을 때)
-        bool isCharging = Input.GetButton("Jump") && isGrounded;
+        IsCharging = Input.GetButton("Jump") && isGrounded;
+        bool isCharging = IsCharging;
 
         float moveInput = 0f;
 
