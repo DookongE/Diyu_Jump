@@ -21,13 +21,34 @@ public class PlayerController : MonoBehaviour
     [Tooltip("최소 점프력 배율입니다. (0~1 사이)")]
     public float minJumpMultiplier = 0.3f;
 
+    [Header("스프라이트 애니메이션")]
+    [Tooltip("가만히 있을 때 스프라이트")]
+    public Sprite idleSprite;
+    [Tooltip("오른쪽 이동 스프라이트 1")]
+    public Sprite moveR1Sprite;
+    [Tooltip("오른쪽 이동 스프라이트 2")]
+    public Sprite moveR2Sprite;
+    [Tooltip("왼쪽 이동 스프라이트 1")]
+    public Sprite moveL1Sprite;
+    [Tooltip("왼쪽 이동 스프라이트 2")]
+    public Sprite moveL2Sprite;
+    [Tooltip("점프 충전 중 스프라이트")]
+    public Sprite jumpReadySprite;
+    [Tooltip("공중에 떠 있을 때 스프라이트")]
+    public Sprite jumpSprite;
+    [Tooltip("이동 애니메이션 프레임 전환 간격(초)")]
+    public float animFrameTime = 0.15f;
+
     private float gravity;
     private float jumpVelocity;
     private float jumpHorizontalSpeed; // 점프 시 수평 속도
     private float currentChargeTime; // 현재 충전된 시간
 
     private Rigidbody2D rb;
+    private SpriteRenderer spriteRenderer;
     private bool isGrounded;
+    private float animTimer;
+    private int animFrame; // 0 또는 1
 
     void Start()
     {
@@ -37,6 +58,9 @@ public class PlayerController : MonoBehaviour
         gravity = -(2 * jumpHeight) / Mathf.Pow(timeToJumpApex, 2);
         jumpVelocity = Mathf.Abs(gravity) * timeToJumpApex;
         jumpHorizontalSpeed = moveSpeed; // 수평 점프 속도는 이동 속도와 동일하게 설정
+
+        // SpriteRenderer 컴포넌트를 가져옵니다.
+        spriteRenderer = GetComponent<SpriteRenderer>();
 
         // Rigidbody2D 컴포넌트를 가져옵니다.
         rb = GetComponent<Rigidbody2D>();
@@ -108,6 +132,9 @@ public class PlayerController : MonoBehaviour
             }
         }
 
+        // 4. 스프라이트 애니메이션 업데이트
+        UpdateSpriteAnimation(moveInput, isCharging);
+
         // 낙하 시 중력 조절 (기본 중력 스케일은 위에서 계산됨)
         if (rb != null)
         {
@@ -162,6 +189,68 @@ public class PlayerController : MonoBehaviour
             {
                 isGrounded = true;
                 break;
+            }
+        }
+    }
+
+    // 스프라이트 애니메이션 업데이트
+    void UpdateSpriteAnimation(float moveInput, bool isCharging)
+    {
+        if (spriteRenderer == null) return;
+
+        // 공중에 떠 있을 때 — Jump 스프라이트
+        if (!isGrounded)
+        {
+            if (jumpSprite != null)
+            {
+                spriteRenderer.sprite = jumpSprite;
+            }
+            animTimer = 0f;
+            animFrame = 0;
+            return;
+        }
+
+        // 스페이스바 충전 중 — JumpReady 스프라이트
+        if (isCharging)
+        {
+            if (jumpReadySprite != null)
+            {
+                spriteRenderer.sprite = jumpReadySprite;
+            }
+            animTimer = 0f;
+            animFrame = 0;
+            return;
+        }
+
+        if (Mathf.Abs(moveInput) > 0.01f)
+        {
+            // 이동 중 — 프레임 전환 타이머
+            animTimer += Time.deltaTime;
+            if (animTimer >= animFrameTime)
+            {
+                animTimer = 0f;
+                animFrame = 1 - animFrame; // 0 ↔ 1 토글
+            }
+
+            if (moveInput > 0)
+            {
+                // 오른쪽 이동
+                spriteRenderer.sprite = (animFrame == 0) ? moveR1Sprite : moveR2Sprite;
+            }
+            else
+            {
+                // 왼쪽 이동
+                spriteRenderer.sprite = (animFrame == 0) ? moveL1Sprite : moveL2Sprite;
+            }
+        }
+        else
+        {
+            // 정지 — Idle 스프라이트
+            animTimer = 0f;
+            animFrame = 0;
+            if (idleSprite != null)
+            {
+                spriteRenderer.sprite = idleSprite;
             }
         }
     }
