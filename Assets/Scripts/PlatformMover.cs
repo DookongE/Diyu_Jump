@@ -27,27 +27,74 @@ public class PlatformMover : MonoBehaviour
     [Range(0f, 1f)]
     public float startOffset = 0f;
 
+    [Header("끝 지점 대기 설정")]
+    [Tooltip("양쪽 끝에서 잠시 멈추는 기능을 사용할지 여부입니다.")]
+    public bool enableEndPause = false;
+
+    [Tooltip("양쪽 끝에 도달했을 때 멈추는 시간(초)입니다.")]
+    public float endPauseTime = 1f;
+
     private Vector3 startPosition;
+    private float progress;      // 0 ~ 1 (0 = 한쪽 끝, 1 = 반대쪽 끝)
+    private int direction = 1;   // 1: 정방향, -1: 역방향
+    private float pauseTimer;    // 대기 남은 시간
+    private bool isPaused;       // 대기 중 여부
 
     void Start()
     {
         startPosition = transform.position;
+        progress = startOffset;
     }
 
     void Update()
     {
-        // 사인파로 부드러운 왕복 운동
-        float t = Mathf.Sin((Time.time * moveSpeed) + (startOffset * Mathf.PI * 2f));
+        if (isPaused)
+        {
+            pauseTimer -= Time.deltaTime;
+            if (pauseTimer <= 0f)
+            {
+                isPaused = false;
+            }
+            return; // 대기 중에는 이동하지 않음
+        }
+
+        // progress를 일정 속도로 증감 (0 ~ 1)
+        float speed = moveSpeed / moveDistance; // moveDistance 단위당 속도 정규화
+        progress += direction * speed * Time.deltaTime;
+
+        // 끝에 도달하면 방향 반전
+        if (progress >= 1f)
+        {
+            progress = 1f;
+            direction = -1;
+            if (enableEndPause)
+            {
+                isPaused = true;
+                pauseTimer = endPauseTime;
+            }
+        }
+        else if (progress <= 0f)
+        {
+            progress = 0f;
+            direction = 1;
+            if (enableEndPause)
+            {
+                isPaused = true;
+                pauseTimer = endPauseTime;
+            }
+        }
+
+        // progress(0~1)를 -0.5 ~ +0.5로 변환하여 시작 위치 중심으로 왕복
+        float t = (progress - 0.5f) * moveDistance;
 
         Vector3 offset = Vector3.zero;
-
         switch (moveDirection)
         {
             case MoveDirection.Horizontal:
-                offset = new Vector3(t * moveDistance, 0f, 0f);
+                offset = new Vector3(t, 0f, 0f);
                 break;
             case MoveDirection.Vertical:
-                offset = new Vector3(0f, t * moveDistance, 0f);
+                offset = new Vector3(0f, t, 0f);
                 break;
         }
 

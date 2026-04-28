@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class PlayerController : MonoBehaviour
 {
@@ -21,6 +22,16 @@ public class PlayerController : MonoBehaviour
     [Tooltip("최소 점프력 배율입니다. (0~1 사이)")]
     public float minJumpMultiplier = 0.3f;
 
+    [Header("넉백 설정")]
+    [Tooltip("넉백 후 발판을 통과하는 시간(초)")]
+    public float passThroughDuration = 1f;
+
+    [Header("낙하 스턴 설정")]
+    [Tooltip("이 높이 이상에서 떨어지면 스턴이 걸립니다.")]
+    public float fallStunHeight = 5f;
+    [Tooltip("스턴 지속 시간(초)")]
+    public float stunDuration = 1.5f;
+
     [Header("스프라이트 애니메이션")]
     [Tooltip("가만히 있을 때 스프라이트")]
     public Sprite idleSprite;
@@ -36,227 +47,347 @@ public class PlayerController : MonoBehaviour
     public Sprite jumpReadySprite;
     [Tooltip("공중에 떠 있을 때 스프라이트")]
     public Sprite jumpSprite;
+    [Tooltip("피격 시 스프라이트")]
+    public Sprite hitSprite;
+    [Tooltip("낙하 스턴 시 스프라이트")]
+    public Sprite stunSprite;
     [Tooltip("이동 애니메이션 프레임 전환 간격(초)")]
     public float animFrameTime = 0.15f;
 
+    // 레이어 번호 (8, 9번은 Unity에서 비어있는 User Layer)
+    private const int PLATFORM_LAYER = 8;
+    private const int KNOCKEDBACK_LAYER = 9;
+
     private float gravity;
     private float jumpVelocity;
-    private float jumpHorizontalSpeed; // 점프 시 수평 속도
-    private float currentChargeTime; // 현재 충전된 시간
+    private float jumpHorizontalSpeed;
+    private float currentChargeTime;
 
     /// <summary>현재 충전 비율 (0~1). UI 게이지에서 사용.</summary>
     public float ChargeRatio => Mathf.Clamp01(currentChargeTime / maxChargeTime);
     /// <summary>현재 충전 중인지 여부.</summary>
     public bool IsCharging { get; private set; }
+
     private Rigidbody2D rb;
     private SpriteRenderer spriteRenderer;
+    private int originalLayer;
+
     private bool isGrounded;
+    private bool wasGrounded;
+    private bool isKnockedBack;
+    private bool isStunned;
+    private float stunTimer;
+    private float highestY;
+    private bool trackingFall;
+    private float passThroughTimer;
     private float animTimer;
-    private int animFrame; // 0 또는 1
+    private int animFrame;
+    private float restartHoldTimer;
 
     void Start()
     {
-        // 물리 공식에 따른 중력과 점프 속도 계산
-        // gravity = -(2 * height) / time^2
-        // jumpVelocity = |gravity| * time
         gravity = -(2 * jumpHeight) / Mathf.Pow(timeToJumpApex, 2);
         jumpVelocity = Mathf.Abs(gravity) * timeToJumpApex;
-        jumpHorizontalSpeed = moveSpeed; // 수평 점프 속도는 이동 속도와 동일하게 설정
+        jumpHorizontalSpeed = moveSpeed;
 
-        // SpriteRenderer 컴포넌트를 가져옵니다.
         spriteRenderer = GetComponent<SpriteRenderer>();
-
-        // Rigidbody2D 컴포넌트를 가져옵니다.
         rb = GetComponent<Rigidbody2D>();
+        originalLayer = gameObject.layer;
+
         if (rb == null)
         {
-            Debug.LogError("Rigidbody2D 컴포넌트가 없습니다! 플레이어어게 Rigidbody2D를 추가해주세요.");
+            Debug.LogError("Rigidbody2D 컴포넌트가 없습니다!");
         }
         else
         {
-            // 계산된 중력을 Rigidbody2D의 gravityScale에 적용 (Physics2D.gravity.y는 보통 -9.81)
-            // rb.gravityScale = gravity / Physics2D.gravity.y;
-            // 하지만 여기서는 직접 힘을 가하거나 gravityScale을 조절하는 방식보다,
-            // Unity의 물리 엔진을 활용하되 gravityScale을 우리가 원하는 gravity에 맞춰 설정합니다.
-            
-            // Unity 기본 중력(-9.81)을 기준으로 gravityScale 설정
             rb.gravityScale = gravity / Physics2D.gravity.y;
         }
+
+        // ────────────────────────────────────────
+        // 레이어 충돌 설정:
+        // KNOCKEDBACK_LAYER(9)는 PLATFORM_LAYER(8)와 충돌하지 않음
+        // KNOCKEDBACK_LAYER(9)는 벽/바닥(Default 등)과는 정상 충돌
+        // ────────────────────────────────────────
+        Physics2D.IgnoreLayerCollision(KNOCKEDBACK_LAYER, PLATFORM_LAYER, true);
     }
 
-    void Update()
+    // ───────────────────────────────────────────
+    //  바닥 감지
+    // ───────────────────────────────────────────
+    void FixedUpdate()
     {
-        // 1. 점프 실행 (뗐을 때) - 가장 먼저 처리하여 chargeTime이 초기화되기 전에 사용
-        if (Input.GetButtonUp("Jump") && isGrounded)
+        // 넉백 통과 타이머
+        if (passThroughTimer > 0f)
         {
-            // 방향 결정 (A: -1, D: 1, 그 외: 0)
-            float directionX = Input.GetAxisRaw("Horizontal");
-            Jump(directionX);
-        }
-
-        // 2. 충전 로직
-        // 점프 충전 중인지 확인 (스페이스바 누르고 있고 바닥에 있을 때)
-        IsCharging = Input.GetButton("Jump") && isGrounded;
-        bool isCharging = IsCharging;
-
-        float moveInput = 0f;
-
-        if (!isCharging)
-        {
-            // 좌우 이동 입력 (충전 중이 아닐 때만 이동 가능)
-            moveInput = Input.GetAxisRaw("Horizontal");
-            currentChargeTime = 0f; // 충전 중이 아니면 초기화
-        }
-        else
-        {
-            // 충전 중일 때는 이동 멈춤 & 충전 시간 증가
-            moveInput = 0f;
-            currentChargeTime += Time.deltaTime;
-        }
-        
-        // 3. 이동 적용 (y축 속도는 유지)
-        if (rb != null)
-        {
-            // 공중에서는 기존 수평 속도 유지 (관성) 또는 제어 가능 여부에 따라 다름
-            // 여기서는 바닥에 있을 때만 멈추고 공중에서는 이동 가능하게 할 수도 있지만, 
-            // "충전 중 이동 불가" 요구사항에 따라 바닥에서만 0으로 설정.
-            if (isGrounded)
+            passThroughTimer -= Time.fixedDeltaTime;
+            if (passThroughTimer <= 0f)
             {
-                 rb.velocity = new Vector2(moveInput * moveSpeed, rb.velocity.y);
-            }
-            else
-            {
-                // 공중 이동 제어 (원한다면)
-                // 지금은 공중에서도 키 입력으로 움직일 수 있게 둠 (moveInput이 0이 아니면)
-                // 단, 점프 직후에는 moveInput이 0일 수 있음. 
-                // 점프 후 공중 제어를 원하면 아래 로직 유지. 
-                // 하지만 "어디로 점프할 지 정한다"는 것은 점프 순간의 방향이 중요하므로,
-                // 점프 후 공중 제어를 막고 싶다면 공중 이동 로직을 수정해야 함.
-                // 일단은 공중 제어 유지.
-                rb.velocity = new Vector2(Input.GetAxisRaw("Horizontal") * moveSpeed, rb.velocity.y);
+                // 통과 시간 끝 → 원래 레이어로 복원
+                gameObject.layer = originalLayer;
             }
         }
 
-        // 4. 스프라이트 애니메이션 업데이트
-        UpdateSpriteAnimation(moveInput, isCharging);
-
-        // 낙하 시 중력 조절 (기본 중력 스케일은 위에서 계산됨)
-        if (rb != null)
-        {
-            float currentGravityScale = gravity / Physics2D.gravity.y;
-
-            if (rb.velocity.y < 0)
-            {
-                rb.gravityScale = currentGravityScale * fallMultiplier;
-            }
-            else if (rb.velocity.y > 0 && !Input.GetButton("Jump"))
-            {
-                // 낮은 점프(버튼을 빨리 뗐을 때) 구현하려면 여기에도 로직 추가 가능하지만,
-                // 지금 요청은 "뗐을 때 점프"이므로 이미 뗐을 때 점프가 시작됨.
-                // 따라서 상승 중에는 기본 중력 적용.
-                 rb.gravityScale = currentGravityScale;
-            }
-            else
-            {
-                rb.gravityScale = currentGravityScale;
-            }
-        }
+        wasGrounded = isGrounded;
+        isGrounded = false;
     }
 
-    void Jump(float directionX)
+    void OnCollisionStay2D(Collision2D collision)
     {
-        if (rb != null)
-        {
-            // 충전 비율 계산 (0~1)
-            float chargeRatio = Mathf.Clamp01(currentChargeTime / maxChargeTime);
-            
-            // 점프 힘 배율 계산 (최소 점프력 ~ 1.0)
-            float jumpMultiplier = Mathf.Lerp(minJumpMultiplier, 1f, chargeRatio);
+        if (collision.gameObject.CompareTag("Block")) return;
 
-            // 최종 점프 속도 적용
-            float finalJumpVelocity = jumpVelocity * jumpMultiplier;
-
-            // 수직 속도는 계산된 finalJumpVelocity, 수평 속도는 입력 방향 * jumpHorizontalSpeed
-            rb.velocity = new Vector2(directionX * jumpHorizontalSpeed, finalJumpVelocity);
-            isGrounded = false; // 점프 직후에는 땅에 있지 않음
-            
-            currentChargeTime = 0f; // 점프 후 충전 시간 초기화
-        }
-    }
-
-    // 바닥 충돌 감지
-    void OnCollisionEnter2D(Collision2D collision)
-    {
-        // 충돌한 물체의 법선 벡터가 위쪽을 향하면 바닥으로 간주
         foreach (ContactPoint2D contact in collision.contacts)
         {
             if (contact.normal.y > 0.5f)
             {
                 isGrounded = true;
-                break;
+                return;
             }
         }
     }
 
-    // 스프라이트 애니메이션 업데이트
+    void OnCollisionEnter2D(Collision2D collision)
+    {
+        if (collision.gameObject.CompareTag("Block"))
+        {
+            ApplyKnockback(collision);
+            return;
+        }
+
+        foreach (ContactPoint2D contact in collision.contacts)
+        {
+            if (contact.normal.y > 0.5f)
+            {
+                isGrounded = true;
+                return;
+            }
+        }
+    }
+
+    // ───────────────────────────────────────────
+    //  메인 로직
+    // ───────────────────────────────────────────
+    void Update()
+    {
+        // R키 2초 홀드 → 재시작
+        if (Input.GetKey(KeyCode.R))
+        {
+            restartHoldTimer += Time.unscaledDeltaTime;
+            if (restartHoldTimer >= 2f)
+            {
+                SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+                return;
+            }
+        }
+        else
+        {
+            restartHoldTimer = 0f;
+        }
+
+        // 착지 순간
+        if (isGrounded && !wasGrounded)
+        {
+            OnLanded();
+        }
+        // 바닥에서 벗어남
+        else if (!isGrounded && wasGrounded)
+        {
+            currentChargeTime = 0f;
+            IsCharging = false;
+        }
+
+        // 스턴 상태
+        if (isStunned)
+        {
+            stunTimer -= Time.deltaTime;
+            if (stunTimer <= 0f) isStunned = false;
+            UpdateSpriteAnimation(0f, false);
+            return;
+        }
+
+        // 넉백 상태 → 모든 키 차단
+        if (isKnockedBack)
+        {
+            UpdateSpriteAnimation(0f, false);
+            return;
+        }
+
+        // 낙하 높이 추적
+        if (!isGrounded)
+        {
+            if (!trackingFall)
+            {
+                trackingFall = true;
+                highestY = transform.position.y;
+            }
+            else if (transform.position.y > highestY)
+            {
+                highestY = transform.position.y;
+            }
+        }
+
+        // 점프 실행
+        if (Input.GetButtonUp("Jump") && isGrounded)
+        {
+            Jump(Input.GetAxisRaw("Horizontal"));
+        }
+
+        // 충전 로직
+        IsCharging = Input.GetButton("Jump") && isGrounded;
+        bool isCharging = IsCharging;
+
+        float moveInput = 0f;
+        if (!isCharging)
+        {
+            moveInput = Input.GetAxisRaw("Horizontal");
+            currentChargeTime = 0f;
+        }
+        else
+        {
+            currentChargeTime += Time.deltaTime;
+        }
+        
+        // 이동 적용
+        if (rb != null)
+        {
+            if (isGrounded)
+            {
+                rb.velocity = new Vector2(moveInput * moveSpeed, rb.velocity.y);
+            }
+            else
+            {
+                rb.velocity = new Vector2(Input.GetAxisRaw("Horizontal") * moveSpeed, rb.velocity.y);
+            }
+        }
+
+        // 스프라이트 업데이트
+        UpdateSpriteAnimation(moveInput, isCharging);
+
+        // 중력 조절
+        if (rb != null)
+        {
+            float baseGravity = gravity / Physics2D.gravity.y;
+            rb.gravityScale = (rb.velocity.y < 0) ? baseGravity * fallMultiplier : baseGravity;
+        }
+    }
+
+    void Jump(float directionX)
+    {
+        if (rb == null) return;
+
+        float chargeRatio = Mathf.Clamp01(currentChargeTime / maxChargeTime);
+        float jumpMultiplier = Mathf.Lerp(minJumpMultiplier, 1f, chargeRatio);
+
+        rb.velocity = new Vector2(directionX * jumpHorizontalSpeed, jumpVelocity * jumpMultiplier);
+        isGrounded = false;
+        currentChargeTime = 0f;
+    }
+
+    void OnLanded()
+    {
+        if (isKnockedBack) isKnockedBack = false;
+
+        if (trackingFall)
+        {
+            float fallDistance = highestY - transform.position.y;
+            if (fallDistance >= fallStunHeight)
+            {
+                isStunned = true;
+                stunTimer = stunDuration;
+                rb.velocity = Vector2.zero;
+            }
+            trackingFall = false;
+        }
+    }
+
+    void ApplyKnockback(Collision2D collision)
+    {
+        if (rb == null) return;
+
+        isKnockedBack = true;
+        isGrounded = false;
+        currentChargeTime = 0f;
+        IsCharging = false;
+
+        // 플레이어를 KNOCKEDBACK 레이어로 변경
+        // → PLATFORM 레이어와 충돌하지 않으므로 발판을 통과함
+        // → 벽/바닥은 Default 레이어이므로 정상 충돌
+        gameObject.layer = KNOCKEDBACK_LAYER;
+        passThroughTimer = passThroughDuration;
+
+        ObstacleBlock obstacle = collision.gameObject.GetComponent<ObstacleBlock>();
+        float forceX = (obstacle != null) ? obstacle.knockbackForceX : 8f;
+        float forceY = (obstacle != null) ? obstacle.knockbackForceY : 6f;
+        float dirX = (obstacle != null) ? obstacle.GetKnockbackDirectionX() : 0f;
+
+        if (Mathf.Abs(dirX) < 0.1f)
+        {
+            Vector2 knockbackDir = Vector2.zero;
+            foreach (ContactPoint2D contact in collision.contacts)
+            {
+                knockbackDir += contact.normal;
+            }
+            knockbackDir.Normalize();
+            dirX = knockbackDir.x;
+
+            if (Mathf.Abs(dirX) < 0.1f)
+            {
+                dirX = (transform.position.x > collision.transform.position.x) ? 1f : -1f;
+            }
+        }
+
+        rb.velocity = new Vector2(dirX * forceX, forceY);
+    }
+
+    // ───────────────────────────────────────────
+    //  스프라이트 애니메이션
+    // ───────────────────────────────────────────
     void UpdateSpriteAnimation(float moveInput, bool isCharging)
     {
         if (spriteRenderer == null) return;
 
-        // 공중에 떠 있을 때 — Jump 스프라이트
-        if (!isGrounded)
+        if (isStunned)
         {
-            if (jumpSprite != null)
-            {
-                spriteRenderer.sprite = jumpSprite;
-            }
-            animTimer = 0f;
-            animFrame = 0;
+            if (stunSprite != null) spriteRenderer.sprite = stunSprite;
             return;
         }
 
-        // 스페이스바 충전 중 — JumpReady 스프라이트
+        if (isKnockedBack)
+        {
+            if (hitSprite != null) spriteRenderer.sprite = hitSprite;
+            return;
+        }
+
+        if (!isGrounded)
+        {
+            if (jumpSprite != null) spriteRenderer.sprite = jumpSprite;
+            return;
+        }
+
         if (isCharging)
         {
-            if (jumpReadySprite != null)
-            {
-                spriteRenderer.sprite = jumpReadySprite;
-            }
-            animTimer = 0f;
-            animFrame = 0;
+            if (jumpReadySprite != null) spriteRenderer.sprite = jumpReadySprite;
             return;
         }
 
         if (Mathf.Abs(moveInput) > 0.01f)
         {
-            // 이동 중 — 프레임 전환 타이머
             animTimer += Time.deltaTime;
             if (animTimer >= animFrameTime)
             {
                 animTimer = 0f;
-                animFrame = 1 - animFrame; // 0 ↔ 1 토글
+                animFrame = 1 - animFrame;
             }
 
             if (moveInput > 0)
-            {
-                // 오른쪽 이동
                 spriteRenderer.sprite = (animFrame == 0) ? moveR1Sprite : moveR2Sprite;
-            }
             else
-            {
-                // 왼쪽 이동
                 spriteRenderer.sprite = (animFrame == 0) ? moveL1Sprite : moveL2Sprite;
-            }
         }
         else
         {
-            // 정지 — Idle 스프라이트
             animTimer = 0f;
             animFrame = 0;
-            if (idleSprite != null)
-            {
-                spriteRenderer.sprite = idleSprite;
-            }
+            if (idleSprite != null) spriteRenderer.sprite = idleSprite;
         }
     }
 }

@@ -27,7 +27,9 @@ public class LevelGenerator : MonoBehaviour
         {
             spawnPosition.y += Random.Range(minY, maxY);
             spawnPosition.x = Random.Range(-levelWidth, levelWidth);
-            Instantiate(platformPrefab, spawnPosition, Quaternion.identity);
+            GameObject platform = Instantiate(platformPrefab, spawnPosition, Quaternion.identity);
+            // 발판 레이어를 8번으로 설정 (넉백 시 통과 대상)
+            platform.layer = 8;
         }
     }
 }
