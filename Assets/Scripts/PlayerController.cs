@@ -211,6 +211,14 @@ public class PlayerController : MonoBehaviour
             return;
         }
 
+        // 대화 중 → 이동/점프 차단
+        if (DialogueUI.Instance != null && DialogueUI.Instance.IsDialogueActive)
+        {
+            if (rb != null) rb.velocity = new Vector2(0f, rb.velocity.y);
+            UpdateSpriteAnimation(0f, false);
+            return;
+        }
+
         // 낙하 높이 추적
         if (!isGrounded)
         {
@@ -315,9 +323,25 @@ public class PlayerController : MonoBehaviour
         passThroughTimer = passThroughDuration;
 
         ObstacleBlock obstacle = collision.gameObject.GetComponent<ObstacleBlock>();
-        float forceX = (obstacle != null) ? obstacle.knockbackForceX : 8f;
-        float forceY = (obstacle != null) ? obstacle.knockbackForceY : 6f;
-        float dirX = (obstacle != null) ? obstacle.GetKnockbackDirectionX() : 0f;
+        RollingObstacle rollingObstacle = collision.gameObject.GetComponent<RollingObstacle>();
+
+        float forceX = 8f;
+        float forceY = 6f;
+        float dirX = 0f;
+
+        if (obstacle != null)
+        {
+            forceX = obstacle.knockbackForceX;
+            forceY = obstacle.knockbackForceY;
+            dirX = obstacle.GetKnockbackDirectionX();
+        }
+        else if (rollingObstacle != null)
+        {
+            forceX = rollingObstacle.knockbackForceX;
+            forceY = rollingObstacle.knockbackForceY;
+            // 굴러오는 방향 기반으로 넉백 방향 자동 결정
+            dirX = 0f;
+        }
 
         if (Mathf.Abs(dirX) < 0.1f)
         {
