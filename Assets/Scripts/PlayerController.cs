@@ -25,6 +25,8 @@ public class PlayerController : MonoBehaviour
     [Header("넉백 설정")]
     [Tooltip("넉백 후 발판을 통과하는 시간(초)")]
     public float passThroughDuration = 1f;
+    [Tooltip("넉백 후 맞은 상태가 유지되는 시간(초). 이 시간 동안 땅을 밟아도 조작 불가.")]
+    public float knockbackStunDuration = 1f;
 
     [Header("낙하 스턴 설정")]
     [Tooltip("이 높이 이상에서 떨어지면 스턴이 걸립니다.")]
@@ -75,6 +77,7 @@ public class PlayerController : MonoBehaviour
     private bool isGrounded;
     private bool wasGrounded;
     private bool isKnockedBack;
+    private float knockbackStunTimer;
     private bool isStunned;
     private float stunTimer;
     private float highestY;
@@ -207,8 +210,16 @@ public class PlayerController : MonoBehaviour
         // 넉백 상태 → 모든 키 차단
         if (isKnockedBack)
         {
-            UpdateSpriteAnimation(0f, false);
-            return;
+            knockbackStunTimer -= Time.deltaTime;
+            if (knockbackStunTimer <= 0f)
+            {
+                isKnockedBack = false;
+            }
+            else
+            {
+                UpdateSpriteAnimation(0f, false);
+                return;
+            }
         }
 
         // 대화 중 → 이동/점프 차단
@@ -292,7 +303,6 @@ public class PlayerController : MonoBehaviour
 
     void OnLanded()
     {
-        if (isKnockedBack) isKnockedBack = false;
 
         if (trackingFall)
         {
@@ -312,6 +322,7 @@ public class PlayerController : MonoBehaviour
         if (rb == null) return;
 
         isKnockedBack = true;
+        knockbackStunTimer = knockbackStunDuration;
         isGrounded = false;
         currentChargeTime = 0f;
         IsCharging = false;
